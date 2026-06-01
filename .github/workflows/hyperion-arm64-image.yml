@@ -1,0 +1,66 @@
+# Fork-only: build the Hermes image for linux/arm64 (the Hyperion Raspberry Pi 5
+# k3s cluster) and push it to this fork's ghcr. The upstream docker-publish.yml
+# is gated `if: github.repository == 'NousResearch/hermes-agent'` and no-ops on
+# the fork (and pushes to Docker Hub), so this stands alone and doesn't touch
+# upstream files — the fork stays cleanly mergeable.
+#
+# Builds NATIVELY on GitHub's free arm64 runner (no QEMU). Pushes to
+# ghcr.io/stevengann/hermes-agent:{latest,arm64} using the built-in GITHUB_TOKEN
+# (no extra registry secret needed). NOTE: the resulting ghcr package is PRIVATE
+# by default — make it public (repo → Packages → hermes-agent → Package settings
+# → Change visibility → Public) so the k3s nodes can pull it without a secret,
+# or add an imagePullSecret on the cluster.
+name: Build arm64 image for Hyperion (ghcr)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'Dockerfile'
+      - 'docker/**'
+      - '.github/workflows/hyperion-arm64-image.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-arm64:
+    # Don't run on the upstream repo (it has its own multi-arch publish).
+    if: github.repository != 'NousResearch/hermes-agent'
+    runs-on: ubuntu-24.04-arm        # native arm64 — free for public repos
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (linux/arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ghcr.io/stevengann/hermes-agent:latest
+            ghcr.io/stevengann/hermes-agent:arm64
+          build-args: |
+            HERMES_GIT_SHA=${{ github.sha }}
+          cache-from: type=gha,scope=hyperion-arm64
+          cache-to: type=gha,mode=max,scope=hyperion-arm64
